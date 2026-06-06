@@ -4,76 +4,51 @@ const fs = require("fs");
 const cors = require("cors");
 
 const app = express();
+
 app.use(express.json());
 
-// =========================
-// 🔥 CORS (Netlify fix definitivo)
-// =========================
 app.use(cors({
-    origin: function (origin, callback) {
-        const allowed = [
-            "https://vaquinhagenesio.netlify.app",
-            "https://vaquinhagenesio.netlify.app/"
-        ];
-
-        // permite Postman / Render healthcheck
-        if (!origin) return callback(null, true);
-
-        if (allowed.includes(origin)) {
-            return callback(null, true);
-        }
-
-        console.log("🚫 CORS bloqueado:", origin);
-        return callback(null, true); // evita crash no backend
-    }
+    origin: [
+        "https://vaquinhagenesio.netlify.app"
+    ]
 }));
 
 // =========================
-// 📦 STORAGE LOCAL
+// STORAGE
 // =========================
+
 const PAYMENTS_FILE = "./payments.json";
 
 if (!fs.existsSync(PAYMENTS_FILE)) {
-    fs.writeFileSync(PAYMENTS_FILE, JSON.stringify([]));
+    fs.writeFileSync(PAYMENTS_FILE, "[]");
 }
 
 function readPayments() {
     try {
-        const raw = fs.readFileSync(PAYMENTS_FILE, "utf8");
-        return raw ? JSON.parse(raw) : [];
-    } catch (err) {
-        console.error("❌ Erro leitura payments:", err.message);
+        return JSON.parse(fs.readFileSync(PAYMENTS_FILE, "utf8"));
+    } catch {
         return [];
     }
 }
 
 function savePayment(payment) {
     try {
-        const data = readPayments();
-        data.push(payment);
-        fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(data, null, 2));
+        const payments = readPayments();
+        payments.push(payment);
+
+        fs.writeFileSync(
+            PAYMENTS_FILE,
+            JSON.stringify(payments, null, 2)
+        );
     } catch (err) {
-        console.error("❌ Erro salvar payment:", err.message);
+        console.error("Erro salvando pagamento:", err);
     }
 }
 
 // =========================
-// 🔐 HELPERS
+// SUNIZE
 // =========================
-function isValidEmail(email) {
-    return typeof email === "string" && email.includes("@");
-}
 
-function formatPhone(phone) {
-    if (!phone) return "+5511999999999";
-    let cleaned = phone.replace(/\D/g, "");
-    if (!cleaned.startsWith("55")) cleaned = "55" + cleaned;
-    return "+" + cleaned;
-}
-
-// =========================
-// 🔥 SUNIZE HEADERS
-// =========================
 function getSunizeHeaders() {
     return {
         "x-api-key": process.env.SUNIZE_API_KEY,
@@ -83,130 +58,118 @@ function getSunizeHeaders() {
 }
 
 // =========================
-// 🚀 CREATE PIX (CORRIGIDO)
+// CREATE PIX
 // =========================
+
 app.post("/create-pix", async (req, res) => {
-    console.log("📥 /create-pix recebido:", req.body);
 
     try {
-        const { name, email, phone, amount, description } = req.body;
 
-        // 🔴 VALIDAÇÃO REAL (sem falso positivo)
-        if (!name || typeof name !== "string" || name.trim().length < 2) {
+        console.log("=================================");
+        console.log("📥 NOVA REQUISIÇÃO");
+        console.log(JSON.stringify(req.body, null, 2));
+        console.log("=================================");
+
+        // validações mínimas
+
+        if (!req.body.customer?.name) {
             return res.status(400).json({
-                error: "Nome inválido",
-                received: name
+                error: "customer.name não enviado"
             });
         }
 
-        if (!amount || isNaN(amount) || Number(amount) < 5) {
+        if (!req.body.customer?.email) {
             return res.status(400).json({
-                error: "Valor mínimo é R$ 5",
-                received: amount
+                error: "customer.email não enviado"
             });
         }
 
-        if (!isValidEmail(email)) {
+        if (!req.body.total_amount) {
             return res.status(400).json({
-                error: "Email inválido",
-                received: email
+                error: "total_amount não enviado"
             });
         }
 
-        const payload = {
-            external_id: "doacao_" + Date.now(),
-            total_amount: Number(amount),
-            payment_method: "PIX",
-            items: [
-                {
-                    id: "1",
-                    title: "Doação - Ajude o Genésio",
-                    description: description || "Doação via vaquinha",
-                    price: Number(amount),
-                    quantity: 1,
-                    is_physical: false
-                }
-            ],
-            ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress || "127.0.0.1",
-            customer: {
-                name: name.trim(),
-                email,
-                phone: formatPhone(phone),
-                document_type: "CPF",
-                document: "00000000000"
-            }
-        };
-
-        console.log("📤 Enviando Sunize:");
-        console.log(JSON.stringify(payload, null, 2));
+        console.log("📤 ENVIANDO PARA SUNIZE");
 
         const response = await axios.post(
             "https://api.sunize.com.br/v1/transactions",
-            payload,
+            req.body,
             {
                 headers: getSunizeHeaders(),
-                timeout: 15000
+                timeout: 20000
             }
         );
 
         const data = response.data;
 
-        console.log("✅ Sunize response:", data);
-
-        if (!data || !data.pix) {
-            return res.status(500).json({
-                error: "Sunize não retornou PIX",
-                raw: data
-            });
-        }
+        console.log("✅ RESPOSTA SUNIZE:");
+        console.log(JSON.stringify(data, null, 2));
 
         savePayment({
-            id: data.id,
-            external_id: data.external_id,
-            status: data.status,
-            amount: data.total_value,
-            customer: payload.customer,
-            pix: data.pix,
-            created_at: new Date().toISOString()
+            created_at: new Date().toISOString(),
+            request: req.body,
+            response: data
         });
 
         return res.json(data);
 
     } catch (err) {
-        console.error("💥 ERRO SUNIZE:");
+
+        console.error("=================================");
+        console.error("💥 ERRO SUNIZE");
         console.error("STATUS:", err.response?.status);
         console.error("DATA:", err.response?.data);
         console.error("MESSAGE:", err.message);
+        console.error("=================================");
 
         return res.status(err.response?.status || 500).json({
             error: "Erro ao criar PIX",
-            sunize: err.response?.data || null,
+            status: err.response?.status || 500,
+            sunize_response: err.response?.data || null,
             message: err.message
         });
     }
 });
 
 // =========================
-// 📦 PAYMENTS
+// PAYMENTS
 // =========================
+
 app.get("/payments", (req, res) => {
     res.json(readPayments());
 });
 
 // =========================
-// 💚 HEALTH
+// HEALTH
 // =========================
+
 app.get("/health", (req, res) => {
     res.json({
         status: "OK",
-        time: new Date().toISOString()
+        server_time: new Date().toISOString(),
+        hasApiKey: !!process.env.SUNIZE_API_KEY,
+        hasApiSecret: !!process.env.SUNIZE_API_SECRET
     });
 });
 
 // =========================
-// 🚀 START SERVER
+// ROOT
 // =========================
+
+app.get("/", (req, res) => {
+    res.json({
+        status: "online",
+        service: "vaquinha-online"
+    });
+});
+
+// =========================
+// START
+// =========================
+
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
