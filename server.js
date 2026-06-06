@@ -3,13 +3,12 @@ const express = require("express");
 const axios = require("axios");
 const fs = require("fs");
 const cors = require("cors");
-require("dotenv").config();
 
 const app = express();
 app.use(express.json());
 
 app.use(cors({
-    origin: "https://paniinii.netlify.app" // seu frontend
+    origin: "https://vaquinhagenesio.netlify.app/" // seu frontend
 }));
 
 const PAYMENTS_FILE = "./payments.json";
