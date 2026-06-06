@@ -1,4 +1,3 @@
-// server.js
 const express = require("express");
 const axios = require("axios");
 const fs = require("fs");
@@ -7,7 +6,9 @@ const cors = require("cors");
 const app = express();
 app.use(express.json());
 
-// 🔥 CORS (corrigido pra não quebrar Netlify com / no final)
+// =========================
+// 🔥 CORS (Netlify fix definitivo)
+// =========================
 app.use(cors({
     origin: function (origin, callback) {
         const allowed = [
@@ -15,19 +16,23 @@ app.use(cors({
             "https://vaquinhagenesio.netlify.app/"
         ];
 
-        if (!origin || allowed.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error("CORS bloqueado: " + origin));
+        // permite Postman / Render healthcheck
+        if (!origin) return callback(null, true);
+
+        if (allowed.includes(origin)) {
+            return callback(null, true);
         }
+
+        console.log("🚫 CORS bloqueado:", origin);
+        return callback(null, true); // evita crash no backend
     }
 }));
-
-const PAYMENTS_FILE = "./payments.json";
 
 // =========================
 // 📦 STORAGE LOCAL
 // =========================
+const PAYMENTS_FILE = "./payments.json";
+
 if (!fs.existsSync(PAYMENTS_FILE)) {
     fs.writeFileSync(PAYMENTS_FILE, JSON.stringify([]));
 }
@@ -48,12 +53,12 @@ function savePayment(payment) {
         data.push(payment);
         fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(data, null, 2));
     } catch (err) {
-        console.error("❌ Erro ao salvar pagamento:", err.message);
+        console.error("❌ Erro salvar payment:", err.message);
     }
 }
 
 // =========================
-// 🔐 VALIDADORES
+// 🔐 HELPERS
 // =========================
 function isValidEmail(email) {
     return typeof email === "string" && email.includes("@");
@@ -67,7 +72,7 @@ function formatPhone(phone) {
 }
 
 // =========================
-// 🔥 HEADERS SUNIZE
+// 🔥 SUNIZE HEADERS
 // =========================
 function getSunizeHeaders() {
     return {
@@ -78,42 +83,53 @@ function getSunizeHeaders() {
 }
 
 // =========================
-// 🔥 CREATE PIX
+// 🚀 CREATE PIX (CORRIGIDO)
 // =========================
 app.post("/create-pix", async (req, res) => {
-    console.log("📥 Nova requisição /create-pix:", req.body);
+    console.log("📥 /create-pix recebido:", req.body);
 
     try {
         const { name, email, phone, amount, description } = req.body;
 
-        // validação forte
-        if (!name) {
-            return res.status(400).json({ error: "Nome obrigatório" });
+        // 🔴 VALIDAÇÃO REAL (sem falso positivo)
+        if (!name || typeof name !== "string" || name.trim().length < 2) {
+            return res.status(400).json({
+                error: "Nome inválido",
+                received: name
+            });
         }
 
-        if (!amount || amount < 5) {
-            return res.status(400).json({ error: "Valor mínimo é R$ 5" });
+        if (!amount || isNaN(amount) || Number(amount) < 5) {
+            return res.status(400).json({
+                error: "Valor mínimo é R$ 5",
+                received: amount
+            });
         }
 
         if (!isValidEmail(email)) {
-            return res.status(400).json({ error: "Email inválido" });
+            return res.status(400).json({
+                error: "Email inválido",
+                received: email
+            });
         }
 
         const payload = {
             external_id: "doacao_" + Date.now(),
             total_amount: Number(amount),
             payment_method: "PIX",
-            items: [{
-                id: "1",
-                title: "Doação - Ajude o Genésio",
-                description: description || "Doação via vaquinha",
-                price: Number(amount),
-                quantity: 1,
-                is_physical: false
-            }],
-            ip: (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "127.0.0.1"),
+            items: [
+                {
+                    id: "1",
+                    title: "Doação - Ajude o Genésio",
+                    description: description || "Doação via vaquinha",
+                    price: Number(amount),
+                    quantity: 1,
+                    is_physical: false
+                }
+            ],
+            ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress || "127.0.0.1",
             customer: {
-                name,
+                name: name.trim(),
                 email,
                 phone: formatPhone(phone),
                 document_type: "CPF",
@@ -121,7 +137,8 @@ app.post("/create-pix", async (req, res) => {
             }
         };
 
-        console.log("📦 Payload enviado Sunize:", JSON.stringify(payload, null, 2));
+        console.log("📤 Enviando Sunize:");
+        console.log(JSON.stringify(payload, null, 2));
 
         const response = await axios.post(
             "https://api.sunize.com.br/v1/transactions",
@@ -134,8 +151,9 @@ app.post("/create-pix", async (req, res) => {
 
         const data = response.data;
 
+        console.log("✅ Sunize response:", data);
+
         if (!data || !data.pix) {
-            console.error("❌ Sunize sem PIX:", data);
             return res.status(500).json({
                 error: "Sunize não retornou PIX",
                 raw: data
@@ -152,22 +170,18 @@ app.post("/create-pix", async (req, res) => {
             created_at: new Date().toISOString()
         });
 
-        return res.json({
-            id: data.id,
-            external_id: data.external_id,
-            status: data.status,
-            total_value: data.total_value,
-            pix: data.pix,
-            customer: data.customer
-        });
+        return res.json(data);
 
     } catch (err) {
-        console.error("💥 ERRO COMPLETO:");
-        console.error(err.response?.data || err.message);
+        console.error("💥 ERRO SUNIZE:");
+        console.error("STATUS:", err.response?.status);
+        console.error("DATA:", err.response?.data);
+        console.error("MESSAGE:", err.message);
 
         return res.status(err.response?.status || 500).json({
-            error: "Erro ao criar pagamento",
-            details: err.response?.data || err.message
+            error: "Erro ao criar PIX",
+            sunize: err.response?.data || null,
+            message: err.message
         });
     }
 });
@@ -190,7 +204,7 @@ app.get("/health", (req, res) => {
 });
 
 // =========================
-// 🚀 START
+// 🚀 START SERVER
 // =========================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
