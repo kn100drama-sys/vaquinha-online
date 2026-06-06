@@ -34,12 +34,14 @@ function readPayments() {
 function savePayment(payment) {
     try {
         const payments = readPayments();
+
         payments.push(payment);
 
         fs.writeFileSync(
             PAYMENTS_FILE,
             JSON.stringify(payments, null, 2)
         );
+
     } catch (err) {
         console.error("Erro salvando pagamento:", err);
     }
@@ -70,31 +72,61 @@ app.post("/create-pix", async (req, res) => {
         console.log(JSON.stringify(req.body, null, 2));
         console.log("=================================");
 
-        // validações mínimas
+        const body = req.body;
 
-        if (!req.body.customer?.name) {
+        if (!body.customer?.name?.trim()) {
             return res.status(400).json({
                 error: "customer.name não enviado"
             });
         }
 
-        if (!req.body.customer?.email) {
+        if (!body.customer?.email?.trim()) {
             return res.status(400).json({
                 error: "customer.email não enviado"
             });
         }
 
-        if (!req.body.total_amount) {
+        if (!body.total_amount) {
             return res.status(400).json({
                 error: "total_amount não enviado"
             });
         }
 
+        // Corrige IP automaticamente
+        let clientIp =
+            req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+            req.socket.remoteAddress ||
+            "8.8.8.8";
+
+        clientIp = String(clientIp)
+            .replace("::ffff:", "")
+            .trim();
+
+        // Payload final para Sunize
+        const payload = {
+            ...body,
+
+            ip: clientIp,
+
+            customer: {
+                ...body.customer,
+
+                // CPF de teste válido
+                document_type: "CPF",
+                document:
+                    body.customer.document &&
+                    body.customer.document !== "00000000000"
+                        ? body.customer.document
+                        : "52998224725"
+            }
+        };
+
         console.log("📤 ENVIANDO PARA SUNIZE");
+        console.log(JSON.stringify(payload, null, 2));
 
         const response = await axios.post(
             "https://api.sunize.com.br/v1/transactions",
-            req.body,
+            payload,
             {
                 headers: getSunizeHeaders(),
                 timeout: 20000
@@ -103,12 +135,12 @@ app.post("/create-pix", async (req, res) => {
 
         const data = response.data;
 
-        console.log("✅ RESPOSTA SUNIZE:");
+        console.log("✅ RESPOSTA SUNIZE");
         console.log(JSON.stringify(data, null, 2));
 
         savePayment({
             created_at: new Date().toISOString(),
-            request: req.body,
+            request: payload,
             response: data
         });
 
