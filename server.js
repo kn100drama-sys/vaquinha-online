@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 
 app.use(cors({
-    origin: "https://vaquinhagenesio.netlify.app/" // seu frontend
+    origin: "https://vaquinhagenesio.netlify.app" // seu frontend
 }));
 
 const PAYMENTS_FILE = "./payments.json";
